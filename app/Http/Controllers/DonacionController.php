@@ -4,12 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Models\Donacion;
 use App\Models\DonacionItem;
-use App\Models\Movimiento;
+use App\Models\SalidaItem;
+use App\Services\InventarioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class DonacionController extends Controller
 {
+    public function __construct(private readonly InventarioService $inventario)
+    {
+    }
+
     public function index(Request $request)
     {
         $query = Donacion::query()->withCount('items');
@@ -44,7 +50,6 @@ class DonacionController extends Controller
         return response()->json($donacion);
     }
 
-
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -64,7 +69,6 @@ class DonacionController extends Controller
         DB::beginTransaction();
 
         try {
-            // 🟦 Crear la donación
             $donacion = Donacion::create([
                 'donante'        => $validated['donante'],
                 'tipo_donante'   => $validated['tipo_donante'] ?? null,
@@ -73,17 +77,25 @@ class DonacionController extends Controller
                 'descripcion'    => $validated['descripcion'] ?? null,
             ]);
 
-            // 🟩 Agregar cada ítem
             foreach ($validated['items'] as $item) {
-                DonacionItem::create([
-                    'donacion_id'      => $donacion->id,
-                    'medicamento_id'   => $item['medicamento_id'],
-                    'cantidad'         => $item['cantidad'],
-                    'lote'             => $item['lote'] ?? null,
+                $donacionItem = DonacionItem::create([
+                    'donacion_id'       => $donacion->id,
+                    'medicamento_id'    => $item['medicamento_id'],
+                    'cantidad'          => $item['cantidad'],
+                    'lote'              => $item['lote'] ?? null,
                     'fecha_vencimiento' => $item['fecha_vencimiento'] ?? null,
                 ]);
-            }
 
+                $this->inventario->registrarEntrada(
+                    medicamentoId: $donacionItem->medicamento_id,
+                    cantidad: $donacionItem->cantidad,
+                    fecha: $donacion->fecha_donacion,
+                    origen: 'donacion',
+                    origenId: $donacionItem->id,
+                    descripcion: "Entrada por donación #{$donacion->id}" .
+                        ($donacionItem->lote ? " - Lote {$donacionItem->lote}" : '')
+                );
+            }
 
             DB::commit();
 
@@ -91,16 +103,18 @@ class DonacionController extends Controller
                 'message' => 'Donación registrada correctamente',
                 'data'    => $donacion->load('items.medicamento'),
             ], 201);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Throwable $e) {
             DB::rollBack();
+
             return response()->json([
                 'message' => 'Error al registrar la donación',
                 'error'   => $e->getMessage(),
             ], 500);
         }
     }
-
-
 
     public function update(Request $request, $id)
     {
@@ -115,158 +129,334 @@ class DonacionController extends Controller
             'tipo_donante'   => 'sometimes|nullable|string|max:255',
             'telefono'       => 'sometimes|nullable|string|max:50',
             'fecha_donacion' => 'sometimes|date',
-            'lote'           => 'sometimes|nullable|string|max:255',
             'descripcion'    => 'sometimes|nullable|string',
         ]);
 
         $donacion->update($validated);
 
-
-        $donacion->update($validated);
-
         return response()->json([
             'message' => 'Donación actualizada correctamente',
-            'data'    => $donacion,
+            'data'    => $donacion->fresh(),
         ]);
     }
 
-
     public function destroy($id)
     {
-        $donacion = Donacion::find($id);
+        $donacion = Donacion::with('items')->find($id);
 
         if (!$donacion) {
             return response()->json(['error' => 'Donación no encontrada'], 404);
         }
 
-        $donacion->delete();
+        $bloqueo = $this->validarEliminacionDonacion($donacion);
 
-        return response()->json(['message' => 'Donación eliminada correctamente']);
-    }
-
-
-    public function actualizarItem(Request $request, $donacionId, $itemId)
-    {
-        $item = DonacionItem::where("donacion_id", $donacionId)
-            ->where("id", $itemId)
-            ->first();
-
-        if (!$item) {
-            return response()->json(["error" => "Ítem no encontrado"], 404);
+        if ($bloqueo) {
+            return response()->json(['message' => $bloqueo], 409);
         }
-
-        $donacion = Donacion::findOrFail($donacionId);
-
-        $request->validate([
-            "cantidad" => "required|integer|min:1",
-            "medicamento_id" => "required|exists:medicamentos,id"
-        ]);
 
         DB::beginTransaction();
 
         try {
-            // 1️⃣ Revertir movimiento anterior
-            Movimiento::create([
-                'medicamento_id' => $item->medicamento_id,
-                'tipo' => 'salida',
-                'cantidad' => $item->cantidad,
-                'fecha' => $donacion->fecha_donacion,
-                'origen' => 'ajuste',
-                'origen_id' => $donacion->id,
-                'descripcion' => 'Reverso por edición de item en donación',
-            ]);
+            foreach ($donacion->items as $item) {
+                $this->inventario->revertirEntrada(
+                    medicamentoId: $item->medicamento_id,
+                    cantidad: $item->cantidad,
+                    fecha: now()->toDateString(),
+                    origen: 'ajuste_donacion',
+                    origenId: $item->id,
+                    descripcion: "Reverso por eliminación de donación #{$donacion->id}"
+                );
+            }
 
-            // 2️⃣ Actualizar item
-            $item->update([
-                "cantidad" => $request->cantidad,
-                "medicamento_id" => $request->medicamento_id
-            ]);
-
-            // 3️⃣ Registrar nuevo movimiento
-            Movimiento::create([
-                'medicamento_id' => $request->medicamento_id,
-                'tipo' => 'entrada',
-                'cantidad' => $request->cantidad,
-                'fecha' => $donacion->fecha_donacion,
-                'origen' => 'donacion',
-                'origen_id' => $donacion->id,
-                'descripcion' => 'Entrada ajustada por edición de item',
-            ]);
+            $donacion->items()->delete();
+            $donacion->delete();
 
             DB::commit();
 
-            return response()->json(["message" => "Ítem actualizado", "item" => $item]);
+            return response()->json(['message' => 'Donación eliminada correctamente']);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json(["error" => $e->getMessage()], 500);
+
+            return response()->json([
+                'message' => 'Error al eliminar la donación',
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 
-
-    public function eliminarItem($donacionId, $itemId)
+    public function actualizarItem(Request $request, $donacionId, $itemId)
     {
-        $item = DonacionItem::where("donacion_id", $donacionId)
-            ->where("id", $itemId)
+        $item = DonacionItem::where('donacion_id', $donacionId)
+            ->where('id', $itemId)
             ->first();
 
         if (!$item) {
-            return response()->json(["error" => "Ítem no encontrado"], 404);
+            return response()->json(['error' => 'Ítem no encontrado'], 404);
         }
 
         $donacion = Donacion::findOrFail($donacionId);
 
+        $validated = $request->validate([
+            'cantidad'          => 'required|integer|min:1',
+            'medicamento_id'    => 'required|exists:medicamentos,id',
+            'fecha_vencimiento' => 'nullable|date',
+            'lote'              => 'nullable|string|max:255',
+        ]);
+
+        $bloqueo = $this->validarCambioItem(
+            item: $item,
+            nuevoMedicamentoId: (int) $validated['medicamento_id'],
+            nuevaCantidad: (int) $validated['cantidad'],
+            nuevoLote: $validated['lote'] ?? null,
+            nuevaFechaVencimiento: $validated['fecha_vencimiento'] ?? null
+        );
+
+        if ($bloqueo) {
+            return response()->json(['message' => $bloqueo], 409);
+        }
+
         DB::beginTransaction();
 
         try {
-            // 1️⃣ Revertir el movimiento original
-            Movimiento::create([
-                'medicamento_id' => $item->medicamento_id,
-                'tipo' => 'salida',
-                'cantidad' => $item->cantidad,
-                'fecha' => $donacion->fecha_donacion,
-                'origen' => 'donacion',
-                'origen_id' => $donacion->id,
-                'descripcion' => 'Salida por eliminación de item de donación',
+            $this->inventario->revertirEntrada(
+                medicamentoId: $item->medicamento_id,
+                cantidad: $item->cantidad,
+                fecha: now()->toDateString(),
+                origen: 'ajuste_donacion',
+                origenId: $item->id,
+                descripcion: 'Reverso por edición de ítem en donación'
+            );
+
+            $item->update([
+                'cantidad'          => $validated['cantidad'],
+                'medicamento_id'    => $validated['medicamento_id'],
+                'fecha_vencimiento' => $validated['fecha_vencimiento'] ?? null,
+                'lote'              => $validated['lote'] ?? null,
             ]);
 
-            // 2️⃣ Eliminar item
+            $this->inventario->registrarEntrada(
+                medicamentoId: $item->medicamento_id,
+                cantidad: $item->cantidad,
+                fecha: $donacion->fecha_donacion,
+                origen: 'donacion',
+                origenId: $item->id,
+                descripcion: 'Entrada ajustada por edición de ítem en donación'
+            );
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Ítem actualizado correctamente',
+                'item' => $item->fresh()->load('medicamento'),
+            ]);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    public function eliminarItem($donacionId, $itemId)
+    {
+        $item = DonacionItem::where('donacion_id', $donacionId)
+            ->where('id', $itemId)
+            ->first();
+
+        if (!$item) {
+            return response()->json(['error' => 'Ítem no encontrado'], 404);
+        }
+
+        $bloqueo = $this->validarCambioItem(
+            item: $item,
+            nuevoMedicamentoId: $item->medicamento_id,
+            nuevaCantidad: 0,
+            nuevoLote: $item->lote,
+            nuevaFechaVencimiento: $item->fecha_vencimiento
+        );
+
+        if ($bloqueo) {
+            return response()->json(['message' => $bloqueo], 409);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $this->inventario->revertirEntrada(
+                medicamentoId: $item->medicamento_id,
+                cantidad: $item->cantidad,
+                fecha: now()->toDateString(),
+                origen: 'ajuste_donacion',
+                origenId: $item->id,
+                descripcion: 'Reverso por eliminación de ítem en donación'
+            );
+
             $item->delete();
 
             DB::commit();
 
-            return response()->json(["message" => "Ítem eliminado correctamente"]);
+            return response()->json(['message' => 'Ítem eliminado correctamente']);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json(["error" => $e->getMessage()], 500);
+
+            return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
-
     public function agregarItem(Request $request, $donacionId)
     {
-        $request->validate([
-            'medicamento_id' => 'required|exists:medicamentos,id',
-            'cantidad'       => 'required|integer|min:1',
+        $validated = $request->validate([
+            'medicamento_id'    => 'required|exists:medicamentos,id',
+            'cantidad'          => 'required|integer|min:1',
             'fecha_vencimiento' => 'nullable|date',
             'lote'              => 'nullable|string|max:255',
         ]);
 
         $donacion = Donacion::find($donacionId);
+
         if (!$donacion) {
             return response()->json(['error' => 'Donación no encontrada'], 404);
         }
 
-        $item = DonacionItem::create([
-            'donacion_id'      => $donacionId,
-            'medicamento_id'   => $request->medicamento_id,
-            'cantidad'         => $request->cantidad,
-            'fecha_vencimiento' => $request->fecha_vencimiento,
-            'lote'              => $request->lote,
-        ]);
+        DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Ítem agregado correctamente',
-            'item'    => $item->load('medicamento')
-        ]);
+        try {
+            $item = DonacionItem::create([
+                'donacion_id'       => $donacionId,
+                'medicamento_id'    => $validated['medicamento_id'],
+                'cantidad'          => $validated['cantidad'],
+                'fecha_vencimiento' => $validated['fecha_vencimiento'] ?? null,
+                'lote'              => $validated['lote'] ?? null,
+            ]);
+
+            $this->inventario->registrarEntrada(
+                medicamentoId: $item->medicamento_id,
+                cantidad: $item->cantidad,
+                fecha: $donacion->fecha_donacion,
+                origen: 'donacion',
+                origenId: $item->id,
+                descripcion: "Entrada por ítem agregado a donación #{$donacion->id}"
+            );
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Ítem agregado correctamente',
+                'item'    => $item->load('medicamento'),
+            ]);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    private function validarCambioItem(
+        DonacionItem $item,
+        int $nuevoMedicamentoId,
+        int $nuevaCantidad,
+        ?string $nuevoLote,
+        ?string $nuevaFechaVencimiento
+    ): ?string {
+        $entradasSinItem = DonacionItem::where('id', '<>', $item->id)
+            ->where('medicamento_id', $item->medicamento_id)
+            ->where(function ($query) use ($item) {
+                $this->aplicarFiltroLote($query, $item->lote);
+            })
+            ->where(function ($query) use ($item) {
+                $this->aplicarFiltroFecha($query, $item->fecha_vencimiento);
+            })
+            ->sum('cantidad');
+
+        $esMismoGrupo =
+            $item->medicamento_id === $nuevoMedicamentoId &&
+            ($item->lote ?? '') === ($nuevoLote ?? '') &&
+            (string) $item->fecha_vencimiento === (string) $nuevaFechaVencimiento;
+
+        $entradasDespues = (int) $entradasSinItem + ($esMismoGrupo ? $nuevaCantidad : 0);
+
+        $salidas = SalidaItem::where('medicamento_id', $item->medicamento_id)
+            ->where(function ($query) use ($item) {
+                $this->aplicarFiltroLote($query, $item->lote);
+            })
+            ->where(function ($query) use ($item) {
+                $this->aplicarFiltroFecha($query, $item->fecha_vencimiento);
+            })
+            ->sum('cantidad');
+
+        if ((int) $salidas > $entradasDespues) {
+            return 'No se puede modificar o eliminar este ítem porque ya existen salidas asociadas a ese medicamento, lote y fecha de vencimiento. La modificación dejaría el inventario sin respaldo.';
+        }
+
+        return null;
+    }
+
+    private function validarEliminacionDonacion(Donacion $donacion): ?string
+    {
+        $itemsAgrupados = $donacion->items
+            ->groupBy(fn ($item) => $item->medicamento_id . '|' . ($item->lote ?? '') . '|' . (string) $item->fecha_vencimiento);
+
+        foreach ($itemsAgrupados as $items) {
+            $primerItem = $items->first();
+
+            $cantidadDonacion = $items->sum('cantidad');
+
+            $entradasTotales = DonacionItem::where('medicamento_id', $primerItem->medicamento_id)
+                ->where(function ($query) use ($primerItem) {
+                    $this->aplicarFiltroLote($query, $primerItem->lote);
+                })
+                ->where(function ($query) use ($primerItem) {
+                    $this->aplicarFiltroFecha($query, $primerItem->fecha_vencimiento);
+                })
+                ->sum('cantidad');
+
+            $entradasDespues = (int) $entradasTotales - (int) $cantidadDonacion;
+
+            $salidas = SalidaItem::where('medicamento_id', $primerItem->medicamento_id)
+                ->where(function ($query) use ($primerItem) {
+                    $this->aplicarFiltroLote($query, $primerItem->lote);
+                })
+                ->where(function ($query) use ($primerItem) {
+                    $this->aplicarFiltroFecha($query, $primerItem->fecha_vencimiento);
+                })
+                ->sum('cantidad');
+
+            if ((int) $salidas > $entradasDespues) {
+                return 'No se puede eliminar esta donación porque uno o más de sus lotes ya tienen salidas registradas. Eliminarla rompería la trazabilidad del inventario.';
+            }
+        }
+
+        return null;
+    }
+
+    private function aplicarFiltroLote($query, ?string $lote): void
+    {
+        if ($lote === null || $lote === '') {
+            $query->whereNull('lote')->orWhere('lote', '');
+            return;
+        }
+
+        $query->where('lote', $lote);
+    }
+
+    private function aplicarFiltroFecha($query, $fecha): void
+    {
+        if ($fecha === null || $fecha === '') {
+            $query->whereNull('fecha_vencimiento');
+            return;
+        }
+
+        $query->whereDate('fecha_vencimiento', $fecha);
     }
 }
