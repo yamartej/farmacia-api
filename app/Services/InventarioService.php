@@ -28,41 +28,25 @@ class InventarioService
         ?string $lote,
         ?string $fechaVencimiento
     ): int {
-        $entradas = DonacionItem::where('medicamento_id', $medicamentoId)
-            ->where(function ($query) use ($lote) {
-                if ($lote === null || $lote === '') {
-                    $query->whereNull('lote')->orWhere('lote', '');
-                } else {
-                    $query->where('lote', $lote);
-                }
-            })
-            ->where(function ($query) use ($fechaVencimiento) {
-                if ($fechaVencimiento === null || $fechaVencimiento === '') {
-                    $query->whereNull('fecha_vencimiento');
-                } else {
-                    $query->whereDate('fecha_vencimiento', $fechaVencimiento);
-                }
-            })
-            ->sum('cantidad');
+        return $this->stockDisponiblePorLoteBase(
+            medicamentoId: $medicamentoId,
+            lote: $lote,
+            fechaVencimiento: $fechaVencimiento
+        );
+    }
 
-        $salidas = SalidaItem::where('medicamento_id', $medicamentoId)
-            ->where(function ($query) use ($lote) {
-                if ($lote === null || $lote === '') {
-                    $query->whereNull('lote')->orWhere('lote', '');
-                } else {
-                    $query->where('lote', $lote);
-                }
-            })
-            ->where(function ($query) use ($fechaVencimiento) {
-                if ($fechaVencimiento === null || $fechaVencimiento === '') {
-                    $query->whereNull('fecha_vencimiento');
-                } else {
-                    $query->whereDate('fecha_vencimiento', $fechaVencimiento);
-                }
-            })
-            ->sum('cantidad');
-
-        return (int) $entradas - (int) $salidas;
+    public function stockDisponiblePorLoteExcluyendoSalida(
+        int $medicamentoId,
+        ?string $lote,
+        ?string $fechaVencimiento,
+        int $salidaId
+    ): int {
+        return $this->stockDisponiblePorLoteBase(
+            medicamentoId: $medicamentoId,
+            lote: $lote,
+            fechaVencimiento: $fechaVencimiento,
+            salidaIdExcluida: $salidaId
+        );
     }
 
     public function registrarEntrada(
@@ -116,29 +100,34 @@ class InventarioService
         ?string $lote,
         ?string $fechaVencimiento
     ): void {
-        $this->validarMedicamento($medicamentoId);
-        $this->validarCantidad($cantidad);
-
-        $stockDisponible = $this->stockDisponiblePorLote(
+        $this->validarStockSuficientePorLoteConStock(
             medicamentoId: $medicamentoId,
+            cantidad: $cantidad,
             lote: $lote,
-            fechaVencimiento: $fechaVencimiento
+            fechaVencimiento: $fechaVencimiento,
+            stockDisponible: $this->stockDisponiblePorLote($medicamentoId, $lote, $fechaVencimiento)
         );
+    }
 
-        if ($stockDisponible < $cantidad) {
-            $medicamento = Medicamento::find($medicamentoId);
-
-            throw ValidationException::withMessages([
-                'cantidad' => sprintf(
-                    'No hay suficiente stock del lote seleccionado para %s. Lote: %s. Vence: %s. Stock disponible del lote: %s. Cantidad solicitada: %s.',
-                    $medicamento?->nombre ?? 'el medicamento seleccionado',
-                    $lote ?: 'SIN LOTE',
-                    $fechaVencimiento ?: 'SIN FECHA',
-                    $stockDisponible,
-                    $cantidad
-                ),
-            ]);
-        }
+    public function validarStockSuficientePorLoteExcluyendoSalida(
+        int $medicamentoId,
+        int $cantidad,
+        ?string $lote,
+        ?string $fechaVencimiento,
+        int $salidaId
+    ): void {
+        $this->validarStockSuficientePorLoteConStock(
+            medicamentoId: $medicamentoId,
+            cantidad: $cantidad,
+            lote: $lote,
+            fechaVencimiento: $fechaVencimiento,
+            stockDisponible: $this->stockDisponiblePorLoteExcluyendoSalida(
+                medicamentoId: $medicamentoId,
+                lote: $lote,
+                fechaVencimiento: $fechaVencimiento,
+                salidaId: $salidaId
+            )
+        );
     }
 
     public function revertirEntrada(
@@ -177,6 +166,64 @@ class InventarioService
         );
     }
 
+    private function stockDisponiblePorLoteBase(
+        int $medicamentoId,
+        ?string $lote,
+        ?string $fechaVencimiento,
+        ?int $salidaIdExcluida = null
+    ): int {
+        $entradas = DonacionItem::where('medicamento_id', $medicamentoId)
+            ->where(function ($query) use ($lote) {
+                $this->aplicarFiltroLote($query, $lote);
+            })
+            ->where(function ($query) use ($fechaVencimiento) {
+                $this->aplicarFiltroFecha($query, $fechaVencimiento);
+            })
+            ->sum('cantidad');
+
+        $salidasQuery = SalidaItem::where('medicamento_id', $medicamentoId)
+            ->where(function ($query) use ($lote) {
+                $this->aplicarFiltroLote($query, $lote);
+            })
+            ->where(function ($query) use ($fechaVencimiento) {
+                $this->aplicarFiltroFecha($query, $fechaVencimiento);
+            });
+
+        if ($salidaIdExcluida !== null) {
+            $salidasQuery->where('salida_id', '<>', $salidaIdExcluida);
+        }
+
+        $salidas = $salidasQuery->sum('cantidad');
+
+        return (int) $entradas - (int) $salidas;
+    }
+
+    private function validarStockSuficientePorLoteConStock(
+        int $medicamentoId,
+        int $cantidad,
+        ?string $lote,
+        ?string $fechaVencimiento,
+        int $stockDisponible
+    ): void {
+        $this->validarMedicamento($medicamentoId);
+        $this->validarCantidad($cantidad);
+
+        if ($stockDisponible < $cantidad) {
+            $medicamento = Medicamento::find($medicamentoId);
+
+            throw ValidationException::withMessages([
+                'cantidad' => sprintf(
+                    'No hay suficiente stock del lote seleccionado para %s. Lote: %s. Vence: %s. Stock disponible del lote: %s. Cantidad solicitada: %s.',
+                    $medicamento?->nombre ?? 'el medicamento seleccionado',
+                    $lote ?: 'SIN LOTE',
+                    $fechaVencimiento ?: 'SIN FECHA',
+                    $stockDisponible,
+                    $cantidad
+                ),
+            ]);
+        }
+    }
+
     private function validarMedicamento(int $medicamentoId): void
     {
         Medicamento::findOrFail($medicamentoId);
@@ -207,5 +254,25 @@ class InventarioService
                 ),
             ]);
         }
+    }
+
+    private function aplicarFiltroLote($query, ?string $lote): void
+    {
+        if ($lote === null || $lote === '') {
+            $query->whereNull('lote')->orWhere('lote', '');
+            return;
+        }
+
+        $query->where('lote', $lote);
+    }
+
+    private function aplicarFiltroFecha($query, ?string $fecha): void
+    {
+        if ($fecha === null || $fecha === '') {
+            $query->whereNull('fecha_vencimiento');
+            return;
+        }
+
+        $query->whereDate('fecha_vencimiento', $fecha);
     }
 }
