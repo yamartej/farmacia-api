@@ -3,7 +3,9 @@
 use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\MedicamentoController;
+use App\Http\Controllers\MedicamentoCatalogController;
 use App\Http\Controllers\DonacionController;
+use App\Http\Controllers\DonacionImportController;
 use App\Http\Controllers\MovimientoController;
 use App\Http\Controllers\SalidaController;
 
@@ -16,6 +18,7 @@ Route::middleware('auth:sanctum')->group(function () {
     /* Medicamentos CRUD */
     Route::get('/medicamentos', [MedicamentoController::class, 'index']);
     Route::post('/medicamentos', [MedicamentoController::class, 'store']);
+    Route::get('/medicamentos/catalogo/excel', [MedicamentoCatalogController::class, 'excel']);
     Route::get('/medicamentos/{id}', [MedicamentoController::class, 'show']);
     Route::put('/medicamentos/{id}', [MedicamentoController::class, 'update']);
     Route::delete('/medicamentos/{id}', [MedicamentoController::class, 'destroy']);
@@ -30,6 +33,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/donaciones/{donacion}/items', [DonacionController::class, 'agregarItem']);
     Route::put('/donaciones/{id}', [DonacionController::class, 'update']);
     Route::delete('/donaciones/{id}', [DonacionController::class, 'destroy']);
+
+    /* Importación masiva de donaciones */
+    Route::post('/donaciones/import/preview', [DonacionImportController::class, 'preview']);
+    Route::post('/donaciones/import/confirm', [DonacionImportController::class, 'confirm']);
 
     /* Entradas y salidas manuales */
     Route::post('/movimientos/entrada', [MovimientoController::class, 'entrada']);
