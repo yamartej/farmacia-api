@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\MedicamentoController;
 use App\Http\Controllers\DonacionController;
 use App\Http\Controllers\MovimientoController;
@@ -12,6 +13,9 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);
+
+    /* Dashboard */
+    Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
     /* Medicamentos CRUD */
     Route::get('/medicamentos', [MedicamentoController::class, 'index']);

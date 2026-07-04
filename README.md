@@ -1,59 +1,138 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Sistema de Farmacia - API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+API REST desarrollada con **Laravel 12** y **Laravel Sanctum** para el sistema de gestión de farmacia.
 
-## About Laravel
+Este backend es consumido por el frontend ubicado en el repositorio `farmacia`.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Funcionalidades principales
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- Autenticación con token Bearer mediante Sanctum.
+- CRUD de medicamentos.
+- Registro y edición de donaciones.
+- Registro y edición de salidas.
+- Movimientos de inventario.
+- Control de stock general y por lote.
+- Validación de stock antes de registrar salidas.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Requisitos
 
-## Learning Laravel
+- PHP 8.2 o superior.
+- Composer.
+- SQLite, MySQL o MariaDB.
+- Node.js / npm si se usan assets del proyecto Laravel.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Instalación
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+```bash
+composer install
+cp .env.example .env
+php artisan key:generate
+```
 
-## Laravel Sponsors
+## Base de datos
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+Por defecto puedes usar SQLite:
 
-### Premium Partners
+```bash
+php artisan migrate
+php artisan db:seed
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Para MySQL/XAMPP, configura en `.env`:
 
-## Contributing
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=farmacia
+DB_USERNAME=root
+DB_PASSWORD=
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Luego ejecuta:
 
-## Code of Conduct
+```bash
+php artisan migrate
+php artisan db:seed
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Ejecutar API
 
-## Security Vulnerabilities
+```bash
+php artisan serve
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+URL local por defecto:
 
-## License
+```text
+http://127.0.0.1:8000
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## CORS
+
+El frontend debe estar dentro de `CORS_ALLOWED_ORIGINS`.
+
+Ejemplo local:
+
+```env
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+Cuando publiques el frontend, agrega el dominio de producción.
+
+## Endpoints principales
+
+### Autenticación
+
+```text
+POST /api/login
+GET  /api/user
+POST /api/logout
+```
+
+### Medicamentos
+
+```text
+GET    /api/medicamentos
+POST   /api/medicamentos
+GET    /api/medicamentos/{id}
+PUT    /api/medicamentos/{id}
+DELETE /api/medicamentos/{id}
+GET    /api/medicamentos/{id}/lotes
+```
+
+### Donaciones
+
+```text
+GET    /api/donaciones
+POST   /api/donaciones
+GET    /api/donaciones/{id}
+PUT    /api/donaciones/{id}
+DELETE /api/donaciones/{id}
+```
+
+### Salidas
+
+```text
+GET    /api/salidas
+POST   /api/salidas
+GET    /api/salidas/{id}
+PUT    /api/salidas/{id}
+DELETE /api/salidas/{id}
+```
+
+### Movimientos
+
+```text
+GET  /api/movimientos
+POST /api/movimientos/entrada
+POST /api/movimientos/salida
+GET  /api/movimientos/medicamento/{id}
+```
+
+## Notas de mejora pendientes
+
+- Crear endpoint de estadísticas para alimentar el dashboard.
+- Optimizar cálculo de stock en listados grandes.
+- Agregar roles de usuario.
+- Agregar pruebas automatizadas para login, donaciones, salidas y stock.
