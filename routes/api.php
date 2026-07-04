@@ -8,12 +8,12 @@ use App\Http\Controllers\MovimientoController;
 use App\Http\Controllers\SalidaController;
 
 Route::post('/login', [AuthController::class, 'login']);
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     /* Medicamentos CRUD */
-
     Route::get('/medicamentos', [MedicamentoController::class, 'index']);
     Route::post('/medicamentos', [MedicamentoController::class, 'store']);
     Route::get('/medicamentos/{id}', [MedicamentoController::class, 'show']);
@@ -21,10 +21,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/medicamentos/{id}', [MedicamentoController::class, 'destroy']);
     Route::get('/medicamentos/{id}/lotes', [MedicamentoController::class, 'lotes']);
 
-
-
     /* Donaciones */
-
     Route::get('/donaciones', [DonacionController::class, 'index']);
     Route::get('/donaciones/{id}', [DonacionController::class, 'show']);
     Route::post('/donaciones', [DonacionController::class, 'store']);
@@ -34,19 +31,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/donaciones/{id}', [DonacionController::class, 'update']);
     Route::delete('/donaciones/{id}', [DonacionController::class, 'destroy']);
 
-    // Entradas y salidas
+    /* Entradas y salidas manuales */
     Route::post('/movimientos/entrada', [MovimientoController::class, 'entrada']);
     Route::post('/movimientos/salida', [MovimientoController::class, 'salida']);
 
-    // Kardex por medicamento
+    /* Kardex por medicamento */
     Route::get('/movimientos/medicamento/{id}', [MovimientoController::class, 'movimientosPorMedicamento']);
 
-    // Movimientos generales
+    /* Movimientos generales */
     Route::get('/movimientos', [MovimientoController::class, 'index']);
 
-    // Rutas para Salidas
+    /* Salidas */
     Route::get('/salidas', [SalidaController::class, 'index']);
     Route::post('/salidas', [SalidaController::class, 'store']);
     Route::get('/salidas/{id}', [SalidaController::class, 'show']);
+    Route::put('/salidas/{id}', [SalidaController::class, 'update']);
     Route::delete('/salidas/{id}', [SalidaController::class, 'destroy']);
 });
